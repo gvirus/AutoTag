@@ -25,6 +25,7 @@ import sys
 import vim
 import time
 import logging
+import re
 from collections import defaultdict
 
 # global vim config variables used (all are g:autotag<name>):
@@ -36,13 +37,14 @@ from collections import defaultdict
 # TagsFile name of tags file to look for
 # Disabled Disable autotag (enable by setting to any non-blank value)
 # StopAt stop looking for a tags file (and make one) at this directory (defaults to $HOME)
+# modificaton: StopAt became a regex for directory to create tags file if tags file not found (by DingYe)
 vim_global_defaults = dict(maxTagsFileSize = 1024*1024*7,
                            ExcludeSuffixes = "tml.xml.text.txt",
                            VerbosityLevel = logging.WARNING,
                            CtagsCmd = "ctags",
                            TagsFile = "tags",
                            Disabled = 0,
-                           StopAt = 0)
+                           StopAt = os.environ['HOME'])
 
 # Just in case the ViM build you're using doesn't have subprocess
 if sys.version < '2.4':
@@ -130,7 +132,7 @@ class AutoTag:
       self.ctags_cmd = vim_global("CtagsCmd")
       self.tags_file = str(vim_global("TagsFile"))
       self.count = 0
-      self.stop_at = vim_global("StopAt")
+      self.stop_at = "^" + vim_global("StopAt") + "$"
 
    def findTagFile(self, source):
       AutoTag.LOGGER.info('source = "%s"', source)
@@ -154,7 +156,7 @@ class AutoTag:
                   break
             ret = (file, tagsFile)
             break
-         elif tagsDir and tagsDir == self.stop_at:
+         elif tagsDir and re.match(self.stop_at, tagsDir):
             AutoTag.LOGGER.info("Reached %s. Making one %s" % (self.stop_at, tagsFile))
             open(tagsFile, 'wb').close()
             ret = (file, tagsFile)
@@ -226,9 +228,14 @@ class AutoTag:
    def rebuildTagFiles(self):
       for ((tagsDir, tagsFile), sources) in self.tags.items():
          self.updateTagsFile(tagsDir, tagsFile, sources)
+
+   # add tagfiles to 'tags' option
+   def addTagFiles(self):
+      for (tagsDir, tagsFile) in self.tags.keys():
+         vim.command("setlocal tags+=%s" % tagsFile)
 EEOOFF
 
-function! AutoTag()
+function! s:AutoTag()
 python << EEOOFF
 try:
    if not vim_global("Disabled", bool):
@@ -243,6 +250,18 @@ EEOOFF
    endif
 endfunction
 
+function! s:AutoAddTags()
+python << EEOOFF
+try:
+   if not vim_global("Disabled", bool):
+      at = AutoTag()
+      at.addSource(vim.eval("expand(\"%:p\")"))
+      at.addTagFiles()
+except:
+   logging.warning(format_exc())
+EEOOFF
+endfunction
+
 function! AutoTagDebug()
    new
    file autotag_debug
@@ -254,7 +273,8 @@ endfunction
 
 augroup autotag
    au!
-   autocmd BufWritePost,FileWritePost * call AutoTag ()
+   autocmd BufReadPost * call s:AutoAddTags()
+   autocmd BufWritePost,FileWritePost * call s:AutoTag ()
 augroup END
 
 endif " has("python")
